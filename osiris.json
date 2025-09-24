@@ -1,0 +1,24 @@
+{
+  "name": "avantis-mcp",
+  "id": "avantis-mcp",
+  "description": "avantis-mcp",
+  "hubUrl": "https://api.osirislabs.xyz/v1",
+  "packageId": "8a9c9650-f09a-49b0-81d5-5cbf873f9172",
+  "serviceClients": [
+    {
+      "serviceClientId": "1d927d6c-2170-41d5-ac1b-00c4cdc3259d",
+      "name": "turnkey",
+      "scopes": [],
+      "policy": {
+        "allow": [],
+        "deny": []
+      }
+    }
+  ],
+  "baseUrl": "http://localhost:3000",
+  "user": {
+    "name": "Shivam",
+    "email": "alekarshivam23@gmail.com",
+    "role": "publisher"
+  }
+}

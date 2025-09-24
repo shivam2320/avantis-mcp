@@ -1,0 +1,83 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { type AuthContextError } from "@osiris-ai/sdk";
+import { McpLogger } from "../utils/logger.js";
+import {
+  createAuthErrorResponse,
+  createErrorResponse,
+  createSuccessResponse,
+  LOG_LEVELS,
+} from "../utils/types.js";
+import { AvantisMCP } from "../client.js";
+import { OpenTradeSchema } from "../schema/index.js";
+
+const logger = new McpLogger("pendle-mcp", LOG_LEVELS.INFO);
+
+export function registerOpenTradeTools(
+  server: McpServer,
+  avantisMCP: AvantisMCP
+): void {
+  logger.info("📝 Registering open trade tools...");
+
+  server.tool(
+    "open_trade",
+    "Open a new trading position on any supported trading pair (e.g., BTC/USD, ETH/USD) with customizable parameters: USDC collateral amount, leverage multiplier, take profit and stop loss levels, trade direction (long/short), order type (market for immediate execution, limit for specific price, or stop for trigger price), and slippage tolerance. Supports both immediate market orders and pending orders with specific execution prices.",
+    OpenTradeSchema,
+    async ({ _trade, _type, _slippageP }) => {
+      try {
+        logger.toolCalled("open_trade", {
+          _trade,
+          _type,
+          _slippageP,
+        });
+
+        const result = await avantisMCP.openTrade({
+          _trade,
+          _type,
+          _slippageP,
+        });
+
+        logger.toolCompleted("open_trade");
+        const priceMessage = _trade.openPrice
+          ? `at specified price ${_trade.openPrice}`
+          : `at current market mid price`;
+
+        return result;
+      } catch (error) {
+        return handleToolError("open_trade", error);
+      }
+    }
+  );
+
+  logger.info("✅ All open trade tools registered successfully");
+}
+
+/**
+ * Centralized error handling for all tools
+ */
+function handleToolError(toolName: string, error: unknown): CallToolResult {
+  if ((error as AuthContextError).authorizationUrl) {
+    const authError = error as AuthContextError;
+    logger.error("Authentication required", {
+      tool: toolName,
+      authUrl: authError.authorizationUrl,
+    });
+
+    return createAuthErrorResponse(
+      `Google authentication required for ${toolName}. Please visit: ${authError.authorizationUrl}`,
+      {
+        authorizationUrl: authError.authorizationUrl,
+        availableServices: authError.availableServices,
+        missingService: authError.missingService,
+        deploymentId: authError.deploymentId,
+      }
+    );
+  }
+
+  logger.error("Tool execution failed", {
+    tool: toolName,
+    error: error instanceof Error ? error.message : String(error),
+  });
+
+  return createErrorResponse(error);
+}
