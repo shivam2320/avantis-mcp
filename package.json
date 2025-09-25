@@ -27,6 +27,7 @@
     "@osiris-ai/web3-evm-sdk": "^0.1.1",
     "@pythnetwork/hermes-client": "^2.0.0",
     "dotenv": "^16.3.1",
+    "ethers": "^6.15.0",
     "pg": "^8.15.16",
     "pino": "^9.11.0",
     "viem": "^2.33.3",

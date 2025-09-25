@@ -220,8 +220,26 @@ export const GetTradeByIdSchema = {
 export const GetAssetPriceSchema = {
   asset: z
     .string()
-    .describe("Asset pair symbol (e.g., EURUSD, BTCUSD, GBPUSD)"),
+    .describe("Asset pair symbol in format 'ASSET/USD' (e.g., 'BTC/USD', 'ETH/USD', 'EUR/USD')"),
 };
+
+export const GetHistorySchema = {
+  address: z
+    .string()
+    .describe("The wallet address to retrieve trading history for"),
+  limit: z
+    .number()
+    .default(5)
+    .describe("Number of recent trading positions to retrieve (defaults to 5)"),
+};
+
+export const GetPositionsSchema = {
+  trader: z
+    .string()
+    .optional()
+    .describe("The trader's wallet address (optional - if not provided, uses the authenticated user's address)"),
+};
+
 
 export interface OpenTradeParams {
   _trade: {
@@ -288,4 +306,13 @@ export interface GetOrderByIdParams {
 
 export interface GetTradeByIdParams {
   tradeId: string;
+}
+
+export interface GetHistoryParams {
+  address: string;
+  limit?: number;
+}
+
+export interface GetPositionsParams {
+  trader?: string;
 }

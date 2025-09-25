@@ -11,18 +11,25 @@ import { OpenTradeParams, CloseTradeParams, UpdateTpAndSLParams, ModifyTradePara
 import { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { EVMWalletClient } from "@osiris-ai/web3-evm-sdk";
 import { serializeTransaction, encodeFunctionData } from 'viem';
-import { TRADING_CONTRACT_ADDRESS, STORAGE_CONTRACT_ADDRESS, USDC_CONTRACT_ADDRESS } from './utils/constants.js';
+import { TRADING_CONTRACT_ADDRESS, STORAGE_CONTRACT_ADDRESS, USDC_CONTRACT_ADDRESS, MULTICALL_CONTRACT_ADDRESS } from './utils/constants.js';
 import { parseUnits } from 'viem';
 import { createWalletClient } from 'viem';
 import { findPairIndex, pairsData } from './utils/pairs-data.js';
 import { TokenInfo } from './utils/types.js';
 import { ERC20_ABI } from "./utils/ABIs/ERC20_ABI.js";
 import { TRADING_ABI } from "./utils/ABIs/TRADING_ABI.js";
+import { MULTICALL_ABI } from "./utils/ABIs/MULTICALL_ABI.js";
 import { HermesClient } from '@pythnetwork/hermes-client';
 import { registerOpenTradeTools } from "./tools/open-trade.js";
 import { registerCloseTradeTools } from "./tools/close-trade.js";
 import { registerUpdateTpAndSLTools } from "./tools/update-tp-sl.js";
 import { registerUpdateMarginTools } from "./tools/update-margin.js";
+import { registerFetchBalancesTools } from "./tools/fetch-balance.js";
+import { registerGetPriceTools } from "./tools/get-price.js";
+import { registerGetPairsTools } from "./tools/get-pairs.js";
+import { registerGetHistoryTools } from "./tools/get-history.js";
+import { registerGetPositionsTools } from "./tools/get-positions.js";
+import { z } from 'zod';
 
 
 export class AvantisMCP {
@@ -799,13 +806,194 @@ export class AvantisMCP {
     }
   }
 
+  async getUserTradingHistory(address: string, limit: number = 5): Promise<any> {
+    try {
+      const apiUrl = `https://api.avantisfi.com/v2/history/portfolio/top/${address}`;
+      
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`API request failed with status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (!data.success) {
+        throw new Error('API returned unsuccessful response');
+      }
+
+      // Limit the results to the requested number
+      if (data.portfolio && data.portfolio.length > limit) {
+        data.portfolio = data.portfolio.slice(0, limit);
+      }
+
+      return data;
+    } catch (error) {
+      throw new Error(`Failed to fetch trading history: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async getPositions(trader?: string): Promise<CallToolResult> {
+    try {
+      // If no trader address provided, get the authenticated user's address
+      if (!trader) {
+        const { token, context } = getAuthContext("osiris");
+        if (!token || !context) {
+          throw new Error("No token or context found");
+        }
+
+        const client = new EVMWalletClient(
+          this.hubBaseUrl,
+          token.access_token,
+          context.deploymentId
+        );
+        const walletRecords = await client.getWalletRecords();
+        if (walletRecords.length === 0) {
+          throw new Error("No wallet record found");
+        }
+        
+        // Get the first available address
+        const firstWallet = walletRecords[0];
+        if (!firstWallet.accounts.addresses.length) {
+          throw new Error("No addresses found in wallet");
+        }
+        
+        trader = firstWallet.accounts.addresses[0].address;
+      }
+
+      // Validate address format
+      if (!trader.match(/^0x[a-fA-F0-9]{40}$/)) {
+        throw new Error("Invalid trader address format");
+      }
+
+      // Get the multicall contract
+      const multicallContract = getContract({
+        address: MULTICALL_CONTRACT_ADDRESS as Address,
+        abi: MULTICALL_ABI,
+        client: this.publicClient,
+      });
+
+      // Call getPositions function
+      const result = await multicallContract.read.getPositions([trader as Address]) as [any[], any[]];
+      
+      const [trades, pendingOpenLimitOrders] = result;
+
+      // Process trades (filter out closed positions where leverage <= 0)
+      const activeTrades = [];
+      for (const aggregatedTrade of trades) {
+        const trade = aggregatedTrade.trade;
+        const tradeInfo = aggregatedTrade.tradeInfo;
+        const marginFee = aggregatedTrade.marginFee;
+        const liquidationPrice = aggregatedTrade.liquidationPrice;
+        
+        // Skip closed positions (leverage <= 0)
+        if (Number(trade.leverage) <= 0) {
+          continue;
+        }
+
+        const tradeDetails = {
+          trade: {
+            trader: trade.trader,
+            pairIndex: Number(trade.pairIndex),
+            index: Number(trade.index),
+            initialPosToken: Number(trade.initialPosToken),
+            positionSizeUSDC: Number(trade.positionSizeUSDC),
+            openPrice: Number(trade.openPrice),
+            buy: trade.buy,
+            leverage: Number(trade.leverage),
+            tp: Number(trade.tp),
+            sl: Number(trade.sl),
+            timestamp: Number(trade.timestamp),
+          },
+          additional_info: {
+            openInterestUSDC: Number(tradeInfo.openInterestUSDC),
+            tpLastUpdated: Number(tradeInfo.tpLastUpdated),
+            slLastUpdated: Number(tradeInfo.slLastUpdated),
+            beingMarketClosed: tradeInfo.beingMarketClosed,
+            lossProtectionTier: Number(tradeInfo.lossProtectionTier),
+          },
+          margin_fee: Number(marginFee),
+          liquidation_price: Number(liquidationPrice),
+        };
+        
+        activeTrades.push(tradeDetails);
+      }
+
+      // Process pending limit orders (filter out invalid orders where leverage <= 0)
+      const activeLimitOrders = [];
+      for (const aggregatedOrder of pendingOpenLimitOrders) {
+        const order = aggregatedOrder.order;
+        const liquidationPrice = aggregatedOrder.liquidationPrice;
+        
+        // Skip invalid orders (leverage <= 0)
+        if (Number(order.leverage) <= 0) {
+          continue;
+        }
+
+        const orderDetails = {
+          trader: order.trader,
+          pairIndex: Number(order.pairIndex),
+          index: Number(order.index),
+          positionSize: Number(order.positionSize),
+          buy: order.buy,
+          leverage: Number(order.leverage),
+          tp: Number(order.tp),
+          sl: Number(order.sl),
+          price: Number(order.price),
+          slippageP: Number(order.slippageP),
+          block: Number(order.block),
+          liquidation_price: Number(liquidationPrice),
+        };
+        
+        activeLimitOrders.push(orderDetails);
+      }
+
+      const responseData = {
+        trader: trader,
+        active_trades: activeTrades,
+        pending_limit_orders: activeLimitOrders,
+        total_active_trades: activeTrades.length,
+        total_pending_orders: activeLimitOrders.length,
+        timestamp: new Date().toISOString()
+      };
+
+      return createSuccessResponse(
+        `✅ Retrieved ${activeTrades.length} active trades and ${activeLimitOrders.length} pending limit orders for trader ${trader}`,
+        responseData
+      );
+    } catch (error) {
+      return createErrorResponse(error);
+    }
+  }
+
   configureServer(server: McpServer): void {
     registerHelloTool(server);
+    registerFetchBalancesTools(server, this);
+    registerGetPriceTools(server, this);
+    registerGetPairsTools(server, this);
+    registerGetHistoryTools(server, this);
+    registerGetPositionsTools(server, this);
     registerHelloPrompt(server);
     registerHelloResource(server);
     registerOpenTradeTools(server, this);
     registerCloseTradeTools(server, this);
     registerUpdateTpAndSLTools(server, this);
     registerUpdateMarginTools(server, this);
+    server.tool(
+      "getTokenAllowance",
+      "Get token allowance",
+      {
+        tokenAddress: z.string(),
+      },
+      async ({ tokenAddress }) => {
+        const allowance = await this.getTokenAllowance(tokenAddress as Address);
+        return allowance;
+      }
+    );
   }
 }
