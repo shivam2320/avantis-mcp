@@ -12,10 +12,11 @@ import { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { EVMWalletClient } from "@osiris-ai/web3-evm-sdk";
 import { serializeTransaction, encodeFunctionData } from 'viem';
 import { TRADING_CONTRACT_ADDRESS, STORAGE_CONTRACT_ADDRESS, USDC_CONTRACT_ADDRESS, MULTICALL_CONTRACT_ADDRESS } from './utils/constants.js';
-import { parseUnits } from 'viem';
+import { parseUnits, formatUnits } from 'viem';
 import { createWalletClient } from 'viem';
-import { findPairIndex, pairsData } from './utils/pairs-data.js';
+import { findPairIndex, pairsData, getPairByIndex } from './utils/pairs-data.js';
 import { TokenInfo } from './utils/types.js';
+import { calculatePnL } from './utils/pnl-calculator.js';
 import { ERC20_ABI } from "./utils/ABIs/ERC20_ABI.js";
 import { TRADING_ABI } from "./utils/ABIs/TRADING_ABI.js";
 import { MULTICALL_ABI } from "./utils/ABIs/MULTICALL_ABI.js";
@@ -60,8 +61,6 @@ export class AvantisMCP {
         priceIds[pairKey] = pair.feed.feedId;
       }
     });
-    
-    console.log(`Loaded ${Object.keys(priceIds).length} price IDs from pairs data:`, Object.keys(priceIds));
     return priceIds;
   }
 
@@ -144,24 +143,25 @@ export class AvantisMCP {
         const availablePairs = this.getAvailableTradingPairs();
         throw new Error(`Price ID not found for trading pair: ${pairKey}. Available pairs: ${availablePairs.join(', ')}`);
       }
-
-      console.log(`Fetching price for ${pairKey} using price ID: ${priceId}`);
       
       const priceUpdates = await this.hermesClient.getLatestPriceUpdates([priceId]);
-      
-      if (!priceUpdates || priceUpdates.length === 0) {
+
+      if (!priceUpdates || !priceUpdates.parsed || priceUpdates.parsed.length === 0) {
         throw new Error(`No price data available for ${pairKey}`);
       }
 
-      const priceUpdate = priceUpdates[0] as any;
-      const price = priceUpdate.price?.price;
+      const priceUpdate = priceUpdates.parsed[0] as any;
       
-      if (!price) {
+      const priceValue = priceUpdate.price?.price;
+      const expo = priceUpdate.price?.expo;
+      
+      if (!priceValue || expo === undefined) {
         throw new Error(`Invalid price data received for ${pairKey}`);
       }
 
-      console.log(`Retrieved price for ${pairKey}: ${price}`);
-      return price.toString();
+      const actualPrice = parseFloat(priceValue) * Math.pow(10, expo);
+      
+      return actualPrice.toString();
     } catch (error) {
       throw new Error(`Failed to fetch price for ${from}/${to}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -288,28 +288,6 @@ export class AvantisMCP {
         args: [STORAGE_CONTRACT_ADDRESS, amountInWei],
         gas: 800000n,
       });
-      console.log(
-        JSON.stringify(
-          {
-            chain: base,
-            account: account,
-            to: tokenAddress,
-            abi: ERC20_ABI,
-            functionName: "approve",
-            args: [STORAGE_CONTRACT_ADDRESS, amountInWei],
-            gas: 8000000n,
-          },
-          (_, v) => (typeof v === "bigint" ? v.toString() : v),
-          2
-        )
-      );
-      console.log(
-        JSON.stringify(
-          preparedTx,
-          (_, v) => (typeof v === "bigint" ? v.toString() : v),
-          2
-        )
-      );
       const serializedTx = serializeTransaction({
         ...preparedTx,
         data: encodeFunctionData({
@@ -357,17 +335,6 @@ export class AvantisMCP {
       if (!token || !context) {
         throw new Error("No token or context found");
       }
-      console.log(
-        JSON.stringify(
-          {
-            hubBaseUrl: this.hubBaseUrl,
-            accessToken: token.access_token,
-            deploymentId: context.deploymentId,
-          },
-          null,
-          2
-        )
-      );
 
       const wallet = this.walletToSession[context.sessionId];
       if (!wallet) {
@@ -407,13 +374,7 @@ export class AvantisMCP {
         openPrice = _trade.openPrice;
       } else {
         try {
-          console.log(
-            `Auto-fetching current market price for ${_trade.from}/${
-              _trade.to || "USD"
-            }...`
-          );
           openPrice = await this.getCurrentMidPrice(_trade.from, _trade.to || "USD");
-          console.log(`Using current mid price: ${openPrice}`);
         } catch (error) {
           throw new Error(
             `Failed to fetch current market price for ${_trade.from}/${
@@ -539,8 +500,40 @@ export class AvantisMCP {
         transport: http(),
       });
 
-      // Convert USDC amount to wei (6 decimals)
-      const amountInWei = parseUnits(_amount, 6);
+      let amountToClose: string;
+      if (!_amount) {
+        const traderAddress = account.address;
+        
+        const responseData = await this.getPositionsData(traderAddress);
+        
+        if (!responseData || !responseData.active_trades || !Array.isArray(responseData.active_trades)) {
+          throw new Error("No active trades found");
+        }
+        
+        const positionIndex = Number(_index || "0");
+        
+        
+        const targetPosition = responseData.active_trades.find(
+          (trade: any) => trade.trade.pairIndex === pairIndex && trade.trade.index === positionIndex
+        );
+        
+        if (!targetPosition) {
+          const availablePositions = responseData.active_trades
+            .filter((trade: any) => trade.trade.pairIndex === pairIndex)
+            .map((trade: any) => trade.trade.index);
+          
+          throw new Error(
+            `No position found for pair ${from}/${to || "USD"} at index ${positionIndex}. ` +
+            `Available positions for this pair: ${availablePositions.join(', ')}`
+          );
+        }
+        
+        amountToClose = targetPosition.trade.collateralUSDC.toString();
+      } else {
+        amountToClose = _amount;
+      }
+
+      const amountInWei = parseUnits(amountToClose, 6);
 
       const preparedTx = await walletClient.prepareTransactionRequest({
         to: TRADING_CONTRACT_ADDRESS,
@@ -639,11 +632,9 @@ export class AvantisMCP {
         transport: http(),
       });
 
-      // Convert prices to wei (10 decimals as per specification)
       const newTPInWei = parseUnits(_newTP, 10);
       const newSLInWei = parseUnits(_newSL, 10);
 
-      // Get price update data for the contract
       const priceId = this.priceIds[`${from}/${to || "USD"}`];
       const priceData = await this.hermesClient.getLatestPriceUpdates([priceId]);
       const priceUpdateData = ["0x" + (priceData[0] as any).binary.data[0]];
@@ -746,10 +737,8 @@ export class AvantisMCP {
         transport: http(),
       });
 
-      // Convert USDC amount to wei (6 decimals)
       const amountInWei = parseUnits(_amount, 6);
 
-      // Get price update data for the contract
       const priceId = this.priceIds[`${from}/${to || "USD"}`];
       const priceData = await this.hermesClient.getLatestPriceUpdates([priceId]);
       const priceUpdateData = ["0x" + (priceData[0] as any).binary.data[0]];
@@ -827,7 +816,6 @@ export class AvantisMCP {
         throw new Error('API returned unsuccessful response');
       }
 
-      // Limit the results to the requested number
       if (data.portfolio && data.portfolio.length > limit) {
         data.portfolio = data.portfolio.slice(0, limit);
       }
@@ -838,9 +826,8 @@ export class AvantisMCP {
     }
   }
 
-  async getPositions(trader?: string): Promise<CallToolResult> {
+  async getPositionsData(trader?: string): Promise<any> {
     try {
-      // If no trader address provided, get the authenticated user's address
       if (!trader) {
         const { token, context } = getAuthContext("osiris");
         if (!token || !context) {
@@ -857,7 +844,6 @@ export class AvantisMCP {
           throw new Error("No wallet record found");
         }
         
-        // Get the first available address
         const firstWallet = walletRecords[0];
         if (!firstWallet.accounts.addresses.length) {
           throw new Error("No addresses found in wallet");
@@ -866,7 +852,6 @@ export class AvantisMCP {
         trader = firstWallet.accounts.addresses[0].address;
       }
 
-      // Validate address format
       if (!trader.match(/^0x[a-fA-F0-9]{40}$/)) {
         throw new Error("Invalid trader address format");
       }
@@ -878,12 +863,10 @@ export class AvantisMCP {
         client: this.publicClient,
       });
 
-      // Call getPositions function
       const result = await multicallContract.read.getPositions([trader as Address]) as [any[], any[]];
       
       const [trades, pendingOpenLimitOrders] = result;
 
-      // Process trades (filter out closed positions where leverage <= 0)
       const activeTrades = [];
       for (const aggregatedTrade of trades) {
         const trade = aggregatedTrade.trade;
@@ -891,46 +874,77 @@ export class AvantisMCP {
         const marginFee = aggregatedTrade.marginFee;
         const liquidationPrice = aggregatedTrade.liquidationPrice;
         
-        // Skip closed positions (leverage <= 0)
         if (Number(trade.leverage) <= 0) {
           continue;
+        }
+
+        const pairIndex = Number(trade.pairIndex);
+        const pairInfo = getPairByIndex(pairIndex);
+        
+        let currentPrice = 0;
+        let pnl = null;
+        let pairSymbol = '';
+
+        if (pairInfo) {
+          pairSymbol = `${pairInfo.from}/${pairInfo.to}`;
+          
+          try {
+            currentPrice = parseFloat(await this.getCurrentMidPrice(pairInfo.from, pairInfo.to));
+            
+            const entryPrice = trade.openPrice ? parseFloat(formatUnits(trade.openPrice.toString(), 10)) : 0;
+            const collateralUSDC = parseFloat(formatUnits(trade.initialPosToken.toString(), 6));
+            const leverage = parseFloat(formatUnits(trade.leverage.toString(), 10));
+            
+            if (entryPrice > 0 && currentPrice > 0 && collateralUSDC > 0 && leverage > 0) {
+              pnl = calculatePnL({
+                isLong: trade.buy,
+                entryPrice: entryPrice,
+                currentPrice: currentPrice,
+                size: collateralUSDC,
+                leverage: leverage
+              });
+            }
+          } catch (error) {
+            console.warn(`Failed to fetch current price for ${pairSymbol}:`, error);
+          }
         }
 
         const tradeDetails = {
           trade: {
             trader: trade.trader,
-            pairIndex: Number(trade.pairIndex),
+            pairIndex: pairIndex,
             index: Number(trade.index),
-            initialPosToken: Number(trade.initialPosToken),
-            positionSizeUSDC: Number(trade.positionSizeUSDC),
-            openPrice: Number(trade.openPrice),
+            collateralUSDC: parseFloat(formatUnits(trade.initialPosToken.toString(), 6)),
+            positionSizeUSDC: trade.initialPosToken ? parseFloat(formatUnits(trade.initialPosToken.toString(), 6)) * parseFloat(formatUnits(trade.leverage.toString(), 10)) : 0 ,
+            openPrice: trade.openPrice ? parseFloat(formatUnits(trade.openPrice.toString(), 10)) : 0,
             buy: trade.buy,
-            leverage: Number(trade.leverage),
-            tp: Number(trade.tp),
-            sl: Number(trade.sl),
+            leverage: parseFloat(formatUnits(trade.leverage.toString(), 10)),
+            tp: trade.tp && trade.tp > 0 ? parseFloat(formatUnits(trade.tp.toString(), 10)) : 0,
+            sl: trade.sl && trade.sl > 0 ? parseFloat(formatUnits(trade.sl.toString(), 10)) : 0,
             timestamp: Number(trade.timestamp),
           },
           additional_info: {
-            openInterestUSDC: Number(tradeInfo.openInterestUSDC),
+            openInterestUSDC: tradeInfo.openInterestUSDC ? parseFloat(formatUnits(tradeInfo.openInterestUSDC.toString(), 6)) : 0,
             tpLastUpdated: Number(tradeInfo.tpLastUpdated),
             slLastUpdated: Number(tradeInfo.slLastUpdated),
             beingMarketClosed: tradeInfo.beingMarketClosed,
             lossProtectionTier: Number(tradeInfo.lossProtectionTier),
           },
-          margin_fee: Number(marginFee),
-          liquidation_price: Number(liquidationPrice),
+          margin_fee: marginFee ? parseFloat(formatUnits(marginFee.toString(), 6)) : 0,
+          liquidation_price: liquidationPrice ? parseFloat(formatUnits(liquidationPrice.toString(), 10)) : 0,
+          pnl: pnl,
+          current_price: currentPrice,
+          pair_symbol: pairSymbol,
         };
         
         activeTrades.push(tradeDetails);
       }
 
-      // Process pending limit orders (filter out invalid orders where leverage <= 0)
       const activeLimitOrders = [];
       for (const aggregatedOrder of pendingOpenLimitOrders) {
         const order = aggregatedOrder.order;
         const liquidationPrice = aggregatedOrder.liquidationPrice;
         
-        // Skip invalid orders (leverage <= 0)
         if (Number(order.leverage) <= 0) {
           continue;
         }
@@ -939,21 +953,21 @@ export class AvantisMCP {
           trader: order.trader,
           pairIndex: Number(order.pairIndex),
           index: Number(order.index),
-          positionSize: Number(order.positionSize),
+          positionSize: order.initialPosToken ? parseFloat(formatUnits(order.initialPosToken.toString(), 6)) * parseFloat(formatUnits(order.leverage.toString(), 10)) : 0,
           buy: order.buy,
-          leverage: Number(order.leverage),
-          tp: Number(order.tp),
-          sl: Number(order.sl),
-          price: Number(order.price),
-          slippageP: Number(order.slippageP),
+          leverage: parseFloat(formatUnits(order.leverage.toString(), 10)),
+          tp: order.tp && order.tp > 0 ? parseFloat(formatUnits(order.tp.toString(), 10)) : 0,
+          sl: order.sl && order.sl > 0 ? parseFloat(formatUnits(order.sl.toString(), 10)) : 0,
+          price: order.price ? parseFloat(formatUnits(order.price.toString(), 10)) : 0,
+          slippageP: order.slippageP ? parseFloat(formatUnits(order.slippageP.toString(), 6)) : 0,
           block: Number(order.block),
-          liquidation_price: Number(liquidationPrice),
+          liquidation_price: liquidationPrice ? parseFloat(formatUnits(liquidationPrice.toString(), 10)) : 0,
         };
         
         activeLimitOrders.push(orderDetails);
       }
 
-      const responseData = {
+      return {
         trader: trader,
         active_trades: activeTrades,
         pending_limit_orders: activeLimitOrders,
@@ -961,9 +975,16 @@ export class AvantisMCP {
         total_pending_orders: activeLimitOrders.length,
         timestamp: new Date().toISOString()
       };
+    } catch (error) {
+      throw error;
+    }
+  }
 
+  async getPositions(trader?: string): Promise<CallToolResult> {
+    try {
+      const responseData = await this.getPositionsData(trader);
       return createSuccessResponse(
-        `✅ Retrieved ${activeTrades.length} active trades and ${activeLimitOrders.length} pending limit orders for trader ${trader}`,
+        `✅ Retrieved ${responseData.active_trades.length} active trades and ${responseData.pending_limit_orders.length} pending limit orders for trader ${responseData.trader}`,
         responseData
       );
     } catch (error) {
@@ -984,6 +1005,37 @@ export class AvantisMCP {
     registerCloseTradeTools(server, this);
     registerUpdateTpAndSLTools(server, this);
     registerUpdateMarginTools(server, this);
+    server.tool(
+      "getUserAddresses",
+      "Get user addresses, you can choose a wallet with chooseWallet",
+      {},
+      async () => {
+        const addresses = await this.getUserAddresses();
+        return addresses;
+      }
+    );
+    server.tool(
+      "chooseWallet",
+      "Choose a wallet, you can get user addresses with getUserAddresses",
+      {
+        address: z.string(),
+      },
+      async ({ address }) => {
+        const wallet = await this.chooseWallet(address as Address);
+        return wallet;
+      }
+    );
+    server.tool(
+      "approveToken",
+      "Approve token spending",
+      {
+        amount: z.string(),
+      },
+      async ({ amount }) => {
+        const allowance = await this.approveToken(BigInt(amount));
+        return allowance;
+      }
+    );
     server.tool(
       "getTokenAllowance",
       "Get token allowance",

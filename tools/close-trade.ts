@@ -21,7 +21,7 @@ export function registerCloseTradeTools(
 
   server.tool(
     "close_trade",
-    "Close an existing trading position partially or completely by specifying the trading pair, position index, and USDC amount to close. Allows flexible position management with partial closures or full position closure.",
+    "Close an existing trading position partially or completely by specifying the trading pair, position index, and optionally the USDC amount to close. If no amount is specified, the entire position will be closed using all available collateral. Allows flexible position management with partial closures or full position closure.",
     CloseTradeSchema,
     async ({ from, to, _index, _amount }) => {
       try {

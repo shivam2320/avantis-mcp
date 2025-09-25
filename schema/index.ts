@@ -72,12 +72,7 @@ export const OpenTradeSchema = {
       .default(true)
       .describe(
         "Trade direction: true for long/buy positions, false for short/sell positions (defaults to true)"
-      ),
-    timestamp: z
-      .string()
-      .describe(
-        "The timestamp of the trade (defaults to the current timestamp)"
-      ),
+      )
   }),
   _type: z
     .string()
@@ -111,8 +106,9 @@ export const CloseTradeSchema = {
     ),
   _amount: z
     .string()
+    .optional()
     .describe(
-      "The amount of the position to close in USDC"
+      "The amount of the position to close in USDC (optional - if not provided, will close the entire position using all collateral)"
     ),
 };
 
@@ -253,7 +249,6 @@ export interface OpenTradeParams {
     from: string;
     to?: string;
     index?: string;
-    timestamp?: string;
     buy?: boolean;
   };
   _type: string;
@@ -264,7 +259,7 @@ export interface CloseTradeParams {
   from: string;
   to?: string;
   _index?: string;
-  _amount: string;
+  _amount?: string;
 }
 
 export interface UpdateTpAndSLParams {

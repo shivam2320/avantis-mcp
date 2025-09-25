@@ -543,3 +543,18 @@ export interface FormattedOrder {
   price: number;
   tradeID?: string;
 }
+
+export interface PnLCalculationParams {
+  isLong: boolean;
+  entryPrice: number;
+  currentPrice: number;
+  size: number;
+  leverage: number;
+}
+
+export interface PnLCalculationResult {
+  pnl: number;
+  percentChange: number;
+  isProfitable: boolean;
+  pnlPercentage: number;
+}

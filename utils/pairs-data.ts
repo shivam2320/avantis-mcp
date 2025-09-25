@@ -15968,3 +15968,25 @@ export function getAvailablePairs(): Array<{
     type: p.asset_type
   }));
 }
+
+export function getPairByIndex(pairIndex: number): {
+  from: string;
+  to: string;
+  pairIndex: number;
+  type: string;
+  symbol: string;
+} | null {
+  const pair = pairs.find(p => p.pair_index === pairIndex);
+  
+  if (!pair) {
+    return null;
+  }
+  
+  return {
+    from: pair.from,
+    to: pair.to,
+    pairIndex: pair.pair_index,
+    type: pair.asset_type,
+    symbol: pair.symbol
+  };
+}

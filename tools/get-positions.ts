@@ -19,13 +19,12 @@ export function registerGetPositionsTools(
 
   server.tool(
     "get_positions",
-    "Get ongoing trades and pending limit orders for a trader. Returns active positions and pending orders from the Multicall contract. If no trader address is provided, uses the authenticated user's address.",
+    "Get ongoing trades and pending limit orders for a trader with real-time PnL calculations. Returns active positions and pending orders from the Multicall contract, including current prices and individual position profit/loss calculations. If no trader address is provided, uses the authenticated user's address.",
     GetPositionsSchema,
     async ({ trader }) => {
       try {
         logger.toolCalled("get_positions", { trader });
 
-        // Get positions using the AvantisMCP client
         const result = await avantisMCP.getPositions(trader);
 
         logger.toolCompleted("get_positions");

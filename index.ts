@@ -2,7 +2,7 @@ import { createMcpServer } from '@osiris-ai/sdk';
 import { PostgresDatabaseAdapter } from '@osiris-ai/postgres-sdk';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { config as dotenv } from 'dotenv';
-import { HelloWorldMCP } from './client.js';
+import { AvantisMCP } from './client.js';
 dotenv();
 async function start(): Promise<void> {
   const hub = process.env.HUB_BASE_URL || 'https://api.osirislabs.xyz/v1';
@@ -10,8 +10,7 @@ async function start(): Promise<void> {
   const clientSecret = process.env.OAUTH_CLIENT_SECRET || "";
   const port = parseInt(process.env.PORT || "3000", 10);
 
-  const hello = new HelloWorldMCP(hub);
-
+  const avantisMCP = new AvantisMCP(hub);
   await createMcpServer({
     name: 'avantis-mcp',
     version: '0.0.1',
@@ -27,7 +26,7 @@ async function start(): Promise<void> {
       baseUrl: 'http://localhost:3000',
       logger: (m: string) => console.log(m),
     },
-    configure: (s: McpServer) => hello.configureServer(s),
+    configure: (s: McpServer) => avantisMCP.configureServer(s),
   });
 
   console.log('🚀 avantis-mcp running on port', port);
