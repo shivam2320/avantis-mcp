@@ -9,45 +9,47 @@ import {
   LOG_LEVELS,
 } from "../utils/types.js";
 import { AvantisMCP } from "../client.js";
-import { CloseTradeSchema } from "../schema/index.js";
+import { UpdateTpAndSLSchema } from "../schema/index.js";
 
 const logger = new McpLogger("avantis-mcp", LOG_LEVELS.INFO);
 
-export function registerCloseTradeTools(
+export function registerUpdateTpAndSLTools(
   server: McpServer,
   avantisMCP: AvantisMCP
 ): void {
-  logger.info("📝 Registering close trade tools...");
+  logger.info("📝 Registering update TP and SL tools...");
 
   server.tool(
-    "close_trade",
-    "Close an existing trading position partially or completely by specifying the trading pair, position index, and USDC amount to close. Allows flexible position management with partial closures or full position closure.",
-    CloseTradeSchema,
-    async ({ from, to, _index, _amount }) => {
+    "update_tp_sl",
+    "Update the take profit (TP) and stop loss (SL) levels for an existing trading position. Specify the trading pair, position index, and new TP/SL price levels.",
+    UpdateTpAndSLSchema,
+    async ({ from, to, _index, _newTP, _newSL }) => {
       try {
-        logger.toolCalled("close_trade", {
+        logger.toolCalled("update_tp_sl", {
           from,
           to,
           _index,
-          _amount,
+          _newTP,
+          _newSL,
         });
 
-        const result = await avantisMCP.closeTradeMarket({
+        const result = await avantisMCP.updateTpAndSl({
           from,
           to,
           _index,
-          _amount,
+          _newTP,
+          _newSL,
         });
 
-        logger.toolCompleted("close_trade");
+        logger.toolCompleted("update_tp_sl");
         return result;
       } catch (error) {
-        return handleToolError("close_trade", error);
+        return handleToolError("update_tp_sl", error);
       }
     }
   );
 
-  logger.info("✅ All close trade tools registered successfully");
+  logger.info("✅ All update TP and SL tools registered successfully");
 }
 
 /**

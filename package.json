@@ -25,6 +25,7 @@
     "@osiris-ai/postgres-sdk": "^0.1.1",
     "@osiris-ai/sdk": "^0.1.8",
     "@osiris-ai/web3-evm-sdk": "^0.1.1",
+    "@pythnetwork/hermes-client": "^2.0.0",
     "dotenv": "^16.3.1",
     "pg": "^8.15.16",
     "pino": "^9.11.0",

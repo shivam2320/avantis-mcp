@@ -9,45 +9,47 @@ import {
   LOG_LEVELS,
 } from "../utils/types.js";
 import { AvantisMCP } from "../client.js";
-import { CloseTradeSchema } from "../schema/index.js";
+import { ModifyTradeSchema } from "../schema/index.js";
 
 const logger = new McpLogger("avantis-mcp", LOG_LEVELS.INFO);
 
-export function registerCloseTradeTools(
+export function registerUpdateMarginTools(
   server: McpServer,
   avantisMCP: AvantisMCP
 ): void {
-  logger.info("📝 Registering close trade tools...");
+  logger.info("📝 Registering update margin tools...");
 
   server.tool(
-    "close_trade",
-    "Close an existing trading position partially or completely by specifying the trading pair, position index, and USDC amount to close. Allows flexible position management with partial closures or full position closure.",
-    CloseTradeSchema,
-    async ({ from, to, _index, _amount }) => {
+    "update_margin",
+    "Modify an existing trading position by adding or withdrawing collateral. Specify the trading pair, position index, amount in USDC, and type (0 to add collateral, 1 to withdraw collateral).",
+    ModifyTradeSchema,
+    async ({ from, to, _index, _amount, _type }) => {
       try {
-        logger.toolCalled("close_trade", {
+        logger.toolCalled("update_margin", {
           from,
           to,
           _index,
           _amount,
+          _type,
         });
 
-        const result = await avantisMCP.closeTradeMarket({
+        const result = await avantisMCP.updateMargin({
           from,
           to,
           _index,
           _amount,
+          _type,
         });
 
-        logger.toolCompleted("close_trade");
+        logger.toolCompleted("update_margin");
         return result;
       } catch (error) {
-        return handleToolError("close_trade", error);
+        return handleToolError("update_margin", error);
       }
     }
   );
 
-  logger.info("✅ All close trade tools registered successfully");
+  logger.info("✅ All update margin tools registered successfully");
 }
 
 /**
