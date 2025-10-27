@@ -637,7 +637,18 @@ export class AvantisMCP {
 
       const priceId = this.priceIds[`${from}/${to || "USD"}`];
       const priceData = await this.hermesClient.getLatestPriceUpdates([priceId]);
-      const priceUpdateData = ["0x" + (priceData[0] as any).binary.data[0]];
+      
+      if (!priceData) {
+        throw new Error("No price data received from Hermes");
+      }
+      
+      const actualPriceData = Array.isArray(priceData) ? priceData[0] : priceData;
+      
+      if (!actualPriceData || !actualPriceData.binary || !actualPriceData.binary.data || !Array.isArray(actualPriceData.binary.data) || actualPriceData.binary.data.length === 0) {
+        throw new Error("Invalid price data structure received from Hermes");
+      }
+      
+      const priceUpdateData = ["0x" + actualPriceData.binary.data[0]];
 
       const preparedTx = await walletClient.prepareTransactionRequest({
         to: TRADING_CONTRACT_ADDRESS,
@@ -741,7 +752,18 @@ export class AvantisMCP {
 
       const priceId = this.priceIds[`${from}/${to || "USD"}`];
       const priceData = await this.hermesClient.getLatestPriceUpdates([priceId]);
-      const priceUpdateData = ["0x" + (priceData[0] as any).binary.data[0]];
+      
+      if (!priceData) {
+        throw new Error("No price data received from Hermes");
+      }
+      
+      const actualPriceData = Array.isArray(priceData) ? priceData[0] : priceData;
+      
+      if (!actualPriceData || !actualPriceData.binary || !actualPriceData.binary.data || !Array.isArray(actualPriceData.binary.data) || actualPriceData.binary.data.length === 0) {
+        throw new Error("Invalid price data structure received from Hermes");
+      }
+      
+      const priceUpdateData = ["0x" + actualPriceData.binary.data[0]];
 
       const preparedTx = await walletClient.prepareTransactionRequest({
         to: TRADING_CONTRACT_ADDRESS,
